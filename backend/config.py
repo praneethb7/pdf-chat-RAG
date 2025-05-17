@@ -15,10 +15,6 @@ CHUNK_MIN_TOKENS: int = 50
 
 TOP_K: int = 5
 
-# Cosine similarity threshold below which the answer is refused (0–1 scale).
-# 0.40 is intentionally conservative to keep hallucination risk near zero.
-SIMILARITY_THRESHOLD: float = 0.05
-
 # How many times to re-call the LLM when it returns grounded=true but no citations
 MAX_CITATION_RETRIES: int = 2
 

@@ -35,10 +35,10 @@ from config import (
     LLM_MODEL,
     LLM_TEMPERATURE,
     MAX_CITATION_RETRIES,
-    SIMILARITY_THRESHOLD,
     TOP_K,
 )
 from app.embeddings import FAISSStore
+from app.crag import evaluate_relevance, rewrite_query
 
 logger = logging.getLogger(__name__)
 
@@ -123,37 +123,46 @@ grounded=false instead.\
 
 def answer_question(store: FAISSStore, question: str) -> QueryResult:
     """
-    Retrieve relevant chunks, apply all grounding checks, then call Groq.
-
-    Returns a QueryResult compatible with the frontend ChatResponse type.
+    Corrective RAG pipeline:
+      1. BM25 retrieval
+      2. Relevance evaluation  (CRAG Layer 1)
+      3. Query rewrite + re-retrieval if irrelevant  (CRAG correction)
+      4. LLM answer generation with citation-validation retry  (Layer 2 + 3)
     """
-    # ── Layer 1: similarity-threshold gate ──────────────────────────────────
+    client = Groq(api_key=GROQ_API_KEY)
+
+    # ── 1. Initial BM25 retrieval ────────────────────────────────────────────
     hits = store.search(question, top_k=TOP_K)
 
     if not hits:
-        logger.warning("FAISS store returned no hits — refusing")
+        logger.warning("BM25 returned no hits — refusing")
         return _refusal()
+
+    # ── 2. CRAG: evaluate relevance of retrieved chunks ──────────────────────
+    is_meta = bool(_META_QUERY_PATTERNS.search(question))
+    if not is_meta:
+        chunk_texts = [chunk["text"] for chunk, _ in hits]
+        relevance = evaluate_relevance(client, question, chunk_texts)
+
+        # ── 3. CRAG: correct if irrelevant ───────────────────────────────────
+        if relevance == "irrelevant":
+            rewritten = rewrite_query(client, question)
+            new_hits = store.search(rewritten, top_k=TOP_K)
+            if new_hits:
+                hits = new_hits
+                logger.info("CRAG correction applied — using rewritten-query hits")
+            else:
+                logger.info("CRAG correction found no hits — refusing")
+                return _refusal()
+    else:
+        logger.info("Meta-query detected — skipping CRAG evaluation")
 
     _log_retrieval(question, hits)
 
-    is_meta = bool(_META_QUERY_PATTERNS.search(question))
-    top_score = hits[0][1]
-    logger.info("Top similarity score: %.4f (threshold: %.4f, meta: %s)", top_score, SIMILARITY_THRESHOLD, is_meta)
-    if not is_meta and top_score < SIMILARITY_THRESHOLD:
-        logger.info(
-            "Top score %.4f < threshold %.4f — refusing without LLM call",
-            top_score,
-            SIMILARITY_THRESHOLD,
-        )
-        return _refusal()
-    if is_meta:
-        logger.info("Meta-query detected — skipping similarity gate (score=%.4f)", top_score)
-
-    # ── Build context ────────────────────────────────────────────────────────
+    # ── 4. Build context ─────────────────────────────────────────────────────
     context = _build_context(hits)
 
-    # ── Layer 2 + 3: LLM call with citation-validation retry loop ───────────
-    client = Groq(api_key=GROQ_API_KEY)
+    # ── Layer 2 + 3: LLM answer with citation-validation retry ───────────────
     extra_reminder = ""
 
     for attempt in range(1, MAX_CITATION_RETRIES + 2):
@@ -212,7 +221,7 @@ def _log_retrieval(question: str, hits: list[tuple[dict, float]]) -> None:
             score,
             chunk["text"][:100],
         )
-    logger.info("Top similarity score: %.4f (threshold: %.4f)", hits[0][1], SIMILARITY_THRESHOLD)
+    logger.info("Top BM25 score (normalised): %.4f", hits[0][1])
 
 
 def _build_context(hits: list[tuple[dict, float]]) -> str:
