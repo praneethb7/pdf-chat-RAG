@@ -1,9 +1,9 @@
 """
-Generate embeddings with sentence-transformers and store/query via FAISS.
+Generate embeddings with fastembed (ONNX runtime) and store/query via FAISS.
 
 Architecture
 ------------
-- Model: all-MiniLM-L6-v2 (384-dim, runs fully local, ~90MB download once)
+- Model: all-MiniLM-L6-v2 (384-dim, ONNX — no PyTorch, ~150MB)
 - Index: IndexFlatIP (inner-product) over L2-normalised vectors → cosine similarity
 - Persistence: each session's index + chunk metadata lives in storage/{session_id}/
 
@@ -18,18 +18,18 @@ from typing import Optional
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 from config import EMBEDDING_MODEL, STORAGE_DIR
 
 # Loaded once at import time; subsequent calls reuse the same object
-_model: Optional[SentenceTransformer] = None
+_model: Optional[TextEmbedding] = None
 
 
-def _get_model() -> SentenceTransformer:
+def _get_model() -> TextEmbedding:
     global _model
     if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        _model = TextEmbedding(EMBEDDING_MODEL)
     return _model
 
 
@@ -68,13 +68,8 @@ class FAISSStore:
         model = _get_model()
         texts = [c["text"] for c in chunks]
 
-        embeddings = model.encode(
-            texts,
-            normalize_embeddings=True,  # L2-normalise → inner product = cosine
-            batch_size=64,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        ).astype(np.float32)
+        # fastembed returns an iterator of numpy arrays, already L2-normalised
+        embeddings = np.array(list(model.embed(texts)), dtype=np.float32)
 
         dim = embeddings.shape[1]
         self._index = faiss.IndexFlatIP(dim)
@@ -131,12 +126,7 @@ class FAISSStore:
             return []
 
         model = _get_model()
-        query_emb = model.encode(
-            [query],
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        ).astype(np.float32)
+        query_emb = np.array(list(model.embed([query])), dtype=np.float32)
 
         k = min(top_k, self._index.ntotal)
         scores, indices = self._index.search(query_emb, k)
