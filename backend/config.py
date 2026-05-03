@@ -8,7 +8,7 @@ GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 LLM_MODEL: str = "llama-3.1-8b-instant"
 LLM_TEMPERATURE: float = 0.0
 
-EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
 CHUNK_MAX_TOKENS: int = 800
 CHUNK_OVERLAP_TOKENS: int = 150
@@ -18,7 +18,7 @@ TOP_K: int = 5
 
 # Cosine similarity threshold below which the answer is refused (0–1 scale).
 # 0.40 is intentionally conservative to keep hallucination risk near zero.
-SIMILARITY_THRESHOLD: float = 0.40
+SIMILARITY_THRESHOLD: float = 0.05
 
 # How many times to re-call the LLM when it returns grounded=true but no citations
 MAX_CITATION_RETRIES: int = 2

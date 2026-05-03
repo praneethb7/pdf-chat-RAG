@@ -299,7 +299,7 @@ def delete_session(session_id: str):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "model": LLM_MODEL, "embeddings": "all-MiniLM-L6-v2"}
+    return {"status": "ok", "model": LLM_MODEL, "embeddings": "BAAI/bge-small-en-v1.5"}
 
 
 # ---------------------------------------------------------------------------

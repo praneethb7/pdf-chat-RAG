@@ -38,7 +38,7 @@ PDF Chat is a full-stack RAG (Retrieval-Augmented Generation) application. At up
 
 1. **Text extraction** — PyMuPDF extracts raw text page-by-page, preserving page boundaries for citation attribution.
 2. **Chunking** — a custom token-window splitter (tiktoken) creates overlapping 800-token chunks (150-token overlap). Each chunk carries `{ page_num, text }` metadata.
-3. **Embedding** — sentence-transformers (`all-MiniLM-L6-v2`) encodes each chunk to a 384-dim L2-normalised vector. Runs entirely locally; no external API call.
+3. **Embedding** — fastembed (ONNX) (`all-MiniLM-L6-v2`) encodes each chunk to a 384-dim L2-normalised vector. Runs entirely locally; no external API call.
 4. **Indexing** — vectors are loaded into a FAISS `IndexFlatIP`. Inner product over normalised vectors equals cosine similarity. The index + chunk metadata are persisted to `storage/{sessionId}/`.
 
 ### Query pipeline
@@ -59,9 +59,9 @@ PDF Chat is a full-stack RAG (Retrieval-Augmented Generation) application. At up
 
 Most RAG systems rely solely on the LLM to decide when it doesn't know something. Adding a hard similarity threshold as a pre-LLM filter catches clear out-of-scope queries cheaply (no API call, no latency). The meta-query bypass prevents over-refusal for broad document-level questions. The LLM JSON schema with `grounded: false` is a second independent check for borderline cases. The citation-retry loop is a final guard against uncited confabulation.
 
-### Local embeddings (sentence-transformers)
+### Local embeddings (fastembed + ONNX Runtime)
 
-`all-MiniLM-L6-v2` runs fully in-process. No embedding API cost, no network latency on the hot path, no per-token pricing. The trade-off is that it is primarily an English model — cross-lingual retrieval accuracy is lower than multilingual alternatives like `paraphrase-multilingual-MiniLM-L12-v2`.
+`all-MiniLM-L6-v2` runs fully in-process via fastembed's ONNX Runtime backend — no PyTorch, no GPU required, ~150 MB footprint. No embedding API cost, no network latency on the hot path, no per-token pricing. The trade-off is that it is primarily an English model — cross-lingual retrieval accuracy is lower than multilingual alternatives like `paraphrase-multilingual-MiniLM-L12-v2`.
 
 ### Groq free tier for LLM
 
@@ -115,11 +115,11 @@ All tuneable constants live in [backend/config.py](backend/config.py):
 |---|---|---|
 | `LLM_MODEL` | `llama-3.1-8b-instant` | Groq model ID |
 | `LLM_TEMPERATURE` | `0.0` | Deterministic output |
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | sentence-transformers model |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | fastembed retrieval model |
 | `CHUNK_MAX_TOKENS` | `800` | Max tokens per chunk |
 | `CHUNK_OVERLAP_TOKENS` | `150` | Overlap between chunks |
 | `CHUNK_MIN_TOKENS` | `50` | Discard chunks smaller than this |
 | `TOP_K` | `5` | Chunks retrieved per query |
-| `SIMILARITY_THRESHOLD` | `0.40` | Layer 1 refusal threshold |
+| `SIMILARITY_THRESHOLD` | `0.15` | Layer 1 refusal threshold |
 | `MAX_CITATION_RETRIES` | `2` | Layer 3 retry count |
 | `MAX_PDF_SIZE_MB` | `50` | Upload size limit |

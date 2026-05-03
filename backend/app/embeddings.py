@@ -1,28 +1,30 @@
 """
-Generate embeddings with fastembed (ONNX runtime) and store/query via FAISS.
+Hybrid retrieval: FAISS dense search + BM25 keyword search, merged with RRF.
 
 Architecture
 ------------
-- Model: all-MiniLM-L6-v2 (384-dim, ONNX — no PyTorch, ~150MB)
-- Index: IndexFlatIP (inner-product) over L2-normalised vectors → cosine similarity
-- Persistence: each session's index + chunk metadata lives in storage/{session_id}/
-
-Cosine similarity scores are in [0, 1] for normalised vectors.
+- Dense:  BAAI/bge-small-en-v1.5 via fastembed ONNX (384-dim, retrieval-optimised)
+          query_embed() for queries, embed() for passages (asymmetric)
+- Sparse: BM25Okapi (rank-bm25) rebuilt from saved chunk text on load
+- Fusion: Reciprocal Rank Fusion (k=60) — no score normalisation needed
+- Index:  FAISS IndexFlatIP over L2-normalised passage vectors
+- Persistence: storage/{session_id}/index.faiss + chunks.json
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Optional
 
 import faiss
 import numpy as np
 from fastembed import TextEmbedding
+from rank_bm25 import BM25Okapi
 
 from config import EMBEDDING_MODEL, STORAGE_DIR
 
-# Loaded once at import time; subsequent calls reuse the same object
 _model: Optional[TextEmbedding] = None
 
 
@@ -33,55 +35,46 @@ def _get_model() -> TextEmbedding:
     return _model
 
 
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+
 # ---------------------------------------------------------------------------
 # FAISSStore
 # ---------------------------------------------------------------------------
 
 class FAISSStore:
-    """
-    Wraps a FAISS IndexFlatIP and a parallel list of chunk metadata.
-
-    Usage
-    -----
-    # Build from chunks and persist
-    store = FAISSStore(session_id)
-    store.build(chunks)
-    store.save()
-
-    # Reload on a future request
-    store = FAISSStore.load(session_id)
-    results = store.search(query, top_k=5)
-    """
-
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.session_dir = os.path.join(STORAGE_DIR, session_id)
         self._index: Optional[faiss.IndexFlatIP] = None
         self._chunks: list[dict] = []
+        self._bm25: Optional[BM25Okapi] = None
 
     # ------------------------------------------------------------------
     # Building
     # ------------------------------------------------------------------
 
     def build(self, chunks: list[dict]) -> None:
-        """Encode all chunks and populate the FAISS index."""
         model = _get_model()
         texts = [c["text"] for c in chunks]
 
-        # fastembed returns an iterator of numpy arrays, already L2-normalised
+        # Dense: passage embeddings (L2-normalised by fastembed)
         embeddings = np.array(list(model.embed(texts)), dtype=np.float32)
-
         dim = embeddings.shape[1]
         self._index = faiss.IndexFlatIP(dim)
         self._index.add(embeddings)
+
         self._chunks = [dict(c) for c in chunks]
+
+        # Sparse: BM25 over tokenised chunk text
+        self._bm25 = BM25Okapi([_tokenize(t) for t in texts])
 
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
     def save(self) -> None:
-        """Write index and metadata to disk so the session survives restarts."""
         os.makedirs(self.session_dir, exist_ok=True)
         faiss.write_index(self._index, self._index_path())
         with open(self._chunks_path(), "w", encoding="utf-8") as f:
@@ -89,11 +82,12 @@ class FAISSStore:
 
     @classmethod
     def load(cls, session_id: str) -> "FAISSStore":
-        """Reload a previously saved store. Raises FileNotFoundError if absent."""
         store = cls(session_id)
         store._index = faiss.read_index(store._index_path())
         with open(store._chunks_path(), "r", encoding="utf-8") as f:
             store._chunks = json.load(f)
+        # BM25 is cheap to rebuild from saved chunk text
+        store._bm25 = BM25Okapi([_tokenize(c["text"]) for c in store._chunks])
         return store
 
     @classmethod
@@ -104,9 +98,7 @@ class FAISSStore:
         )
 
     def delete(self) -> None:
-        """Remove all files for this session from disk."""
         import shutil
-
         if os.path.isdir(self.session_dir):
             shutil.rmtree(self.session_dir)
 
@@ -116,27 +108,51 @@ class FAISSStore:
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[dict, float]]:
         """
-        Return the top_k most similar chunks with their cosine similarity scores.
+        Hybrid search: FAISS + BM25 merged with Reciprocal Rank Fusion.
 
-        Returns:
-            List of (chunk_dict, score) sorted by descending score.
-            score is in [0, 1] (1 = identical).
+        Returns top_k (chunk, dense_score) pairs sorted by RRF score.
+        dense_score is kept for compatibility with the similarity threshold gate.
         """
         if self._index is None or self._index.ntotal == 0:
             return []
 
+        n = self._index.ntotal
+        fetch_k = min(top_k * 3, n)  # cast a wider net before merging
+
+        # --- Dense retrieval ---
         model = _get_model()
-        query_emb = np.array(list(model.embed([query])), dtype=np.float32)
+        query_emb = np.array(list(model.query_embed([query])), dtype=np.float32)
+        scores, indices = self._index.search(query_emb, fetch_k)
+        dense_ranked: list[tuple[int, float]] = [
+            (int(idx), float(score))
+            for score, idx in zip(scores[0], indices[0])
+            if idx >= 0
+        ]
 
-        k = min(top_k, self._index.ntotal)
-        scores, indices = self._index.search(query_emb, k)
+        # --- Sparse retrieval (BM25) ---
+        bm25_scores = self._bm25.get_scores(_tokenize(query))
+        sparse_ranked: list[tuple[int, float]] = [
+            (int(idx), float(bm25_scores[idx]))
+            for idx in np.argsort(bm25_scores)[::-1][:fetch_k]
+        ]
 
-        results: list[tuple[dict, float]] = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx >= 0:
-                results.append((self._chunks[idx], float(score)))
+        # --- Reciprocal Rank Fusion ---
+        RRF_K = 60
+        rrf: dict[int, float] = {}
+        for rank, (idx, _) in enumerate(dense_ranked):
+            rrf[idx] = rrf.get(idx, 0.0) + 1.0 / (RRF_K + rank + 1)
+        for rank, (idx, _) in enumerate(sparse_ranked):
+            rrf[idx] = rrf.get(idx, 0.0) + 1.0 / (RRF_K + rank + 1)
 
-        return results  # already sorted descending by FAISS
+        top_indices = sorted(rrf, key=rrf.__getitem__, reverse=True)[:top_k]
+
+        dense_score_map = {idx: score for idx, score in dense_ranked}
+        results = [
+            (self._chunks[idx], dense_score_map.get(idx, 0.0))
+            for idx in top_indices
+        ]
+        # Sort by dense score so the threshold gate sees the best dense score first
+        return sorted(results, key=lambda x: x[1], reverse=True)
 
     # ------------------------------------------------------------------
     # Helpers
