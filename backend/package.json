@@ -1,0 +1,37 @@
+{
+  "name": "pdf-chat-backend",
+  "version": "1.0.0",
+  "description": "PDF Chat RAG Backend",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@langchain/community": "^0.3.22",
+    "@langchain/core": "^0.3.26",
+    "@langchain/google-genai": "^0.1.4",
+    "@langchain/openai": "^0.3.16",
+    "@langchain/textsplitters": "^0.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "faiss-node": "^0.5.1",
+    "langchain": "^0.3.11",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.2",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

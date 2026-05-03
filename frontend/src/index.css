@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background-color: #f9f6f1;
+    color: #1e1b2e;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 15px;
+    font-weight: 430;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: #dde0f8;
+    color: #1e1b2e;
+  }
+}
+
+/* Thin scrollbar — canvas (main chat area) */
+.scrollbar-canvas::-webkit-scrollbar       { width: 4px; }
+.scrollbar-canvas::-webkit-scrollbar-track  { background: transparent; }
+.scrollbar-canvas::-webkit-scrollbar-thumb  { background: #ddd6c8; border-radius: 2px; }
+.scrollbar-canvas::-webkit-scrollbar-thumb:hover { background: #c4beb0; }
+
+/* Thin scrollbar — panel (sidebar) */
+.scrollbar-panel::-webkit-scrollbar       { width: 3px; }
+.scrollbar-panel::-webkit-scrollbar-track  { background: transparent; }
+.scrollbar-panel::-webkit-scrollbar-thumb  { background: #2c3255; border-radius: 2px; }

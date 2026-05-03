@@ -1,0 +1,2 @@
+# Extra dependency for the evaluation runner (not needed for the main app)
+requests>=2.31.0
