@@ -8,7 +8,6 @@ GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 LLM_MODEL: str = "llama-3.1-8b-instant"
 LLM_TEMPERATURE: float = 0.0
 
-EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
 CHUNK_MAX_TOKENS: int = 800
 CHUNK_OVERLAP_TOKENS: int = 150
