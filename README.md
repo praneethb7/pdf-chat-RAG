@@ -42,8 +42,8 @@ Upload any PDF and ask questions. Every answer is grounded exclusively in the do
 ### 1. Clone
 
 ```bash
-git clone https://github.com/<your-username>/pdf-chat.git
-cd pdf-chat
+git clone https://github.com/praneethb7/pdf-chat-RAG.git
+cd pdf-chat-RAG
 ```
 
 ### 2. Backend
